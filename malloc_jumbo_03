@@ -1,0 +1,193 @@
+diff -pru perl5.004_01.latest/av.c perl5.004_01.malloc/av.c
+--- perl5.004_01.latest/av.c	Thu Mar  6 22:10:30 1997
++++ perl5.004_01.malloc/av.c	Sun Jun 29 13:25:20 1997
+@@ -71,9 +71,15 @@ I32 key;
+ 		U32 bytes;
+ #endif
+ 
++#ifdef MYMALLOC
++		newmax = malloced_size((void*)AvALLOC(av))/sizeof(SV*) - 1;
++
++		if (key <= newmax) 
++		    goto resized;
++#endif 
+ 		newmax = key + AvMAX(av) / 5;
+ 	      resize:
+-#ifdef STRANGE_MALLOC
++#if defined(STRANGE_MALLOC) || defined(MYMALLOC)
+ 		Renew(AvALLOC(av),newmax+1, SV*);
+ #else
+ 		bytes = (newmax + 1) * sizeof(SV*);
+@@ -95,6 +101,7 @@ I32 key;
+ 		    Safefree(AvALLOC(av));
+ 		AvALLOC(av) = ary;
+ #endif
++	      resized:
+ 		ary = AvALLOC(av) + AvMAX(av) + 1;
+ 		tmp = newmax - AvMAX(av);
+ 		if (av == curstack) {	/* Oops, grew stack (via av_store()?) */
+@@ -104,7 +111,7 @@ I32 key;
+ 		}
+ 	    }
+ 	    else {
+-		newmax = key < 4 ? 4 : key;
++		newmax = key < 3 ? 3 : key;
+ 		New(2,AvALLOC(av), newmax+1, SV*);
+ 		ary = AvALLOC(av) + 1;
+ 		tmp = newmax;
+diff -pru perl5.004_01.latest/global.sym perl5.004_01.malloc/global.sym
+--- perl5.004_01.latest/global.sym	Mon Jun 16 11:17:04 1997
++++ perl5.004_01.malloc/global.sym	Sat Jun 28 00:31:52 1997
+@@ -99,6 +99,7 @@ log_amg
+ lshift_amg
+ lshift_ass_amg
+ lt_amg
++malloced_size
+ markstack
+ markstack_max
+ markstack_ptr
+diff -pru perl5.004_01.latest/hv.c perl5.004_01.malloc/hv.c
+--- perl5.004_01.latest/hv.c	Thu Mar 20 18:38:36 1997
++++ perl5.004_01.malloc/hv.c	Sat Jun 28 22:28:00 1997
+@@ -592,7 +592,7 @@ HV *hv;
+     I32 oldsize = (I32) xhv->xhv_max + 1; /* sic(k) */
+     register I32 newsize = oldsize * 2;
+     register I32 i;
+-    register HE **a;
++    register HE **a = (HE**)xhv->xhv_array;
+     register HE **b;
+     register HE *entry;
+     register HE **oentry;
+@@ -600,9 +600,8 @@ HV *hv;
+     I32 tmp;
+ #endif
+ 
+-    a = (HE**)xhv->xhv_array;
+     nomemok = TRUE;
+-#ifdef STRANGE_MALLOC
++#if defined(STRANGE_MALLOC) || defined(MYMALLOC)
+     Renew(a, newsize, HE*);
+ #else
+     i = newsize * sizeof(HE*);
+@@ -677,7 +676,7 @@ IV newmax;
+     a = (HE**)xhv->xhv_array;
+     if (a) {
+ 	nomemok = TRUE;
+-#ifdef STRANGE_MALLOC
++#if defined(STRANGE_MALLOC) || defined(MYMALLOC)
+ 	Renew(a, newsize, HE*);
+ #else
+ 	i = newsize * sizeof(HE*);
+diff -pru perl5.004_01.latest/perl.c perl5.004_01.malloc/perl.c
+--- perl5.004_01.latest/perl.c	Mon Jun 16 12:06:44 1997
++++ perl5.004_01.malloc/perl.c	Fri Jun 27 21:22:28 1997
+@@ -104,7 +104,7 @@ register PerlInterpreter *sv_interp;
+ 
+     /* Init the real globals? */
+     if (!linestr) {
+-	linestr = NEWSV(65,80);
++	linestr = NEWSV(65,79);
+ 	sv_upgrade(linestr,SVt_PVIV);
+ 
+ 	if (!SvREADONLY(&sv_undef)) {
+diff -pru perl5.004_01.latest/pp_hot.c perl5.004_01.malloc/pp_hot.c
+--- perl5.004_01.latest/pp_hot.c	Mon Jun 16 11:17:06 1997
++++ perl5.004_01.malloc/pp_hot.c	Fri Jun 27 21:22:28 1997
+@@ -1178,14 +1178,14 @@ do_readline()
+ 	(void)SvUPGRADE(sv, SVt_PV);
+ 	tmplen = SvLEN(sv);	/* remember if already alloced */
+ 	if (!tmplen)
+-	    Sv_Grow(sv, 80);	/* try short-buffering it */
++	    Sv_Grow(sv, 79);	/* try short-buffering it */
+ 	if (type == OP_RCATLINE)
+ 	    offset = SvCUR(sv);
+ 	else
+ 	    offset = 0;
+     }
+     else {
+-	sv = sv_2mortal(NEWSV(57, 80));
++	sv = sv_2mortal(NEWSV(57, 79));
+ 	offset = 0;
+     }
+     for (;;) {
+@@ -1240,13 +1240,13 @@ do_readline()
+ 		SvLEN_set(sv, SvCUR(sv)+1);
+ 		Renew(SvPVX(sv), SvLEN(sv), char);
+ 	    }
+-	    sv = sv_2mortal(NEWSV(58, 80));
++	    sv = sv_2mortal(NEWSV(58, 79));
+ 	    continue;
+ 	}
+ 	else if (gimme == G_SCALAR && !tmplen && SvLEN(sv) - SvCUR(sv) > 80) {
+ 	    /* try to reclaim a bit of scalar space (only on 1st alloc) */
+ 	    if (SvCUR(sv) < 60)
+-		SvLEN_set(sv, 80);
++		SvLEN_set(sv, 79);
+ 	    else
+ 		SvLEN_set(sv, SvCUR(sv)+40);	/* allow some slop */
+ 	    Renew(SvPVX(sv), SvLEN(sv), char);
+diff -pru perl5.004_01.latest/pp_sys.c perl5.004_01.malloc/pp_sys.c
+--- perl5.004_01.latest/pp_sys.c	Fri Jun  6 14:21:10 1997
++++ perl5.004_01.malloc/pp_sys.c	Fri Jun 27 21:22:28 1997
+@@ -194,7 +194,7 @@ PP(pp_backtick)
+ 	    SV *sv;
+ 
+ 	    for (;;) {
+-		sv = NEWSV(56, 80);
++		sv = NEWSV(56, 79);
+ 		if (sv_gets(sv, fp, 0) == Nullch) {
+ 		    SvREFCNT_dec(sv);
+ 		    break;
+diff -pru perl5.004_01.latest/proto.h perl5.004_01.malloc/proto.h
+--- perl5.004_01.latest/proto.h	Mon Jun 16 11:17:06 1997
++++ perl5.004_01.malloc/proto.h	Sat Jun 28 00:50:48 1997
+@@ -226,6 +226,7 @@ int	magic_setvec	_((SV* sv, MAGIC* mg));
+ int	magic_wipepack	_((SV* sv, MAGIC* mg));
+ void	magicname _((char* sym, char* name, I32 namlen));
+ int	main _((int argc, char** argv, char** env));
++MEM_SIZE	malloced_size _((void *p));
+ void	markstack_grow _((void));
+ #ifdef USE_LOCALE_COLLATE
+ char*	mem_collxfrm _((const char* s, STRLEN len, STRLEN* xlen));
+diff -pru perl5.004_01.latest/sv.c perl5.004_01.malloc/sv.c
+--- perl5.004_01.latest/sv.c	Mon Jun 16 11:17:08 1997
++++ perl5.004_01.malloc/sv.c	Sat Jun 28 23:30:14 1997
+@@ -1077,8 +1077,16 @@ unsigned long newlen;
+     else
+ 	s = SvPVX(sv);
+     if (newlen > SvLEN(sv)) {		/* need more room? */
+-        if (SvLEN(sv) && s)
++	if (SvLEN(sv) && s) {
++#ifdef MYMALLOC
++	    STRLEN l = malloced_size((void*)SvPVX(sv));
++	    if (newlen <= l) {
++		SvLEN_set(sv, l);
++		return s;
++	    } else
++#endif 
+ 	    Renew(s,newlen,char);
++	}
+         else
+ 	    New(703,s,newlen,char);
+ 	SvPV_set(sv, s);
+diff -pru perl5.004_01.latest/toke.c perl5.004_01.malloc/toke.c
+--- perl5.004_01.latest/toke.c	Mon Jun 16 11:17:08 1997
++++ perl5.004_01.malloc/toke.c	Fri Jun 27 21:22:28 1997
+@@ -4693,7 +4693,7 @@ register char *s;
+ 	s--, herewas = newSVpv(s,d-s);
+     s += SvCUR(herewas);
+ 
+-    tmpstr = NEWSV(87,80);
++    tmpstr = NEWSV(87,79);
+     sv_upgrade(tmpstr, SVt_PVIV);
+     if (term == '\'') {
+ 	op_type = OP_CONST;
+@@ -4845,7 +4845,7 @@ char *start;
+ 	term = tmps[5];
+     multi_close = term;
+ 
+-    sv = NEWSV(87,80);
++    sv = NEWSV(87,79);
+     sv_upgrade(sv, SVt_PVIV);
+     SvIVX(sv) = term;
+     (void)SvPOK_only(sv);		/* validate pointer */
